@@ -1,0 +1,9 @@
+import { prisma } from '@/lib/prisma'
+import { NextResponse } from 'next/server'
+
+export async function POST(_req: Request, { params }: { params: { id: string } }) {
+  const id = params.id
+  await prisma.design.update({ where: { id }, data: { status: 'APPROVED' } })
+  return NextResponse.redirect(new URL('/admin', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3008'))
+}
+

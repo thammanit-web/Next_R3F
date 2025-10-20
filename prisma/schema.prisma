@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum AssetKind {
+  DECK
+  WHEEL
+  GRIPTAPE
+}
+
+enum DesignStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FULFILLED
+  CANCELED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  designs   Design[]
+  orders    Order[]
+  createdAt DateTime @default(now())
+}
+
+model Asset {
+  id        String    @id @default(cuid())
+  kind      AssetKind
+  uid       String
+  url       String
+  createdAt DateTime  @default(now())
+
+  @@unique([kind, uid], name: "kind_uid")
+}
+
+model Design {
+  id            String  @id @default(cuid())
+  customerEmail String?
+  notes         String?
+  griptapeUid   String
+  griptapeUrl   String
+  deckUid       String
+  deckUrl       String
+  wheelUid      String
+  wheelUrl      String
+  truckColor    String
+  boltColor     String
+
+  previewUrl String?
+  status     DesignStatus @default(SUBMITTED)
+
+  user   User?   @relation(fields: [userId], references: [id])
+  userId String?
+
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  design     Design      @relation(fields: [designId], references: [id])
+  designId   String
+  status     OrderStatus @default(PENDING)
+  quantity   Int         @default(1)
+  priceCents Int         @default(0)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  User User[]
+}
