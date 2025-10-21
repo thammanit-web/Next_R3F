@@ -1,12 +1,27 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { AssetKind } from '@prisma/client'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+function getSupabase(): SupabaseClient {
+  const url =
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL 
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    throw new Error('Supabase environment variables are missing on the server')
+  }
+  return createClient(url, key, {
+    auth: { persistSession: false },
+  })
+}
 
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
@@ -15,55 +30,45 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
   return NextResponse.json({ asset })
 }
 
-export async function PUT(req: Request, context: { params: Promise<{ id: string }> } | { params: { id: string } }) {
-  const params = 'then' in (context as any).params ? await (context as any).params : (context as any).params
-  const { id } = params
+export async function PUT(req: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
+  const ct = req.headers.get('content-type') || ''
 
-  const form = await req.formData()
-  const kindRaw = form.get('kind')?.toString()
-  const uid = form.get('uid')?.toString().trim()
-  const file = form.get('file') as unknown as File | null
-  const urlFromForm = form.get('url')?.toString().trim()
-
-  if (!uid) {
-    return NextResponse.json({ error: 'uid is required' }, { status: 400 })
+  if (!/multipart\/form-data|application\/x-www-form-urlencoded/i.test(ct)) {
+    return NextResponse.json(
+      { error: 'Content-Type must be form-data or x-www-form-urlencoded' },
+      { status: 400 }
+    )
   }
 
-  let newUrl: string | undefined
+  const formData = await req.formData()
+  const kind = formData.get('kind')?.toString() as AssetKind
+  const uid = formData.get('uid')?.toString() || undefined
+  const file = formData.get('file') as File | null
 
+  const data: any = {}
+  if (kind) data.kind = kind
+  if (uid) data.uid = uid
+
+  // Optional: handle file upload via Supabase Storage
   if (file) {
-    // อัปโหลดไฟล์ขึ้น Supabase Storage
-    const bytes = await file.arrayBuffer()
-    const ext = file.name.split('.').pop() || 'bin'
-    const storagePath = `assets/${id}-${Date.now()}.${ext}`
-
-    const up = await supabase.storage.from(process.env.SUPABASE_BUCKET!).upload(storagePath, new Uint8Array(bytes), {
-      upsert: true,
-      contentType: file.type || 'application/octet-stream',
+    const supabase = getSupabase()
+    const bucket = process.env.SUPABASE_BUCKET || 'assets'
+    const path = `${Date.now()}-${file.name}`
+    const arrayBuf = await file.arrayBuffer()
+    const { error } = await supabase.storage.from(bucket).upload(path, new Uint8Array(arrayBuf), {
+      upsert: false,
+      contentType: file.type,
     })
-    if (up.error) {
-      return NextResponse.json({ error: up.error.message }, { status: 400 })
+    if (error) {
+      return NextResponse.json({ error: `Upload failed: ${error.message}` }, { status: 500 })
     }
-    const { data: pub } = supabase.storage
-      .from(process.env.SUPABASE_BUCKET!)
-      .getPublicUrl(storagePath)
-
-    newUrl = pub.publicUrl
-  } else if (urlFromForm) {
-    // ไม่อัปโหลดไฟล์ แต่เปลี่ยน URL
-    newUrl = urlFromForm
+    const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path)
+    data.url = pub.publicUrl
   }
 
-  const data: any = { uid }
-  if (kindRaw) data.kind = kindRaw as AssetKind
-  if (newUrl) data.url = newUrl
-
-  const updated = await prisma.asset.update({
-    where: { id },
-    data,
-  })
-
-  return NextResponse.json({ asset: updated })
+  const updated = await prisma.asset.update({ where: { id }, data })
+  return NextResponse.json({ ok: true, asset: updated })
 }
 
 export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }) {
@@ -72,12 +77,16 @@ export async function DELETE(_req: Request, context: { params: Promise<{ id: str
   if (!asset) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   try {
-    // แปลง URL กลับเป็น path ใน Storage (ถ้า bucket เป็น public)
+    const bucket = process.env.SUPABASE_BUCKET || 'assets'
+    const supabase = getSupabase()
+
+    // convert public URL back to storage path (for public buckets)
     const url = new URL(asset.url)
-    const idx = url.pathname.indexOf(`/object/public/${process.env.SUPABASE_BUCKET}/`)
+    const marker = `/object/public/${bucket}/`
+    const idx = url.pathname.indexOf(marker)
     if (idx >= 0) {
-      const storagePath = url.pathname.slice(idx + `/object/public/${process.env.SUPABASE_BUCKET}/`.length)
-      await supabase.storage.from(process.env.SUPABASE_BUCKET!).remove([storagePath])
+      const storagePath = url.pathname.slice(idx + marker.length)
+      await supabase.storage.from(bucket).remove([storagePath])
     }
   } catch (e) {
     console.warn('Delete from storage failed', e)
