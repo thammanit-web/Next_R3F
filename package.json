@@ -21,6 +21,7 @@
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
     "@react-three/rapier": "^2.1.0",
+    "@supabase/supabase-js": "^2.76.0",
     "clsx": "^2.1.1",
     "formidable": "^3.5.4",
     "gsap": "^3.13.0",

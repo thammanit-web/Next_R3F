@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { writeFile, mkdir, unlink } from 'fs/promises'
-import path from 'path'
 import { AssetKind } from '@prisma/client'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
@@ -11,73 +15,74 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
   return NextResponse.json({ asset })
 }
 
+export async function PUT(req: Request, context: { params: Promise<{ id: string }> } | { params: { id: string } }) {
+  const params = 'then' in (context as any).params ? await (context as any).params : (context as any).params
+  const { id } = params
 
-export async function PUT(req: Request, context: { params: Promise<{ id: string }> }) {
-  const { id } = await context.params
-  const contentType = req.headers.get('content-type') || ''
+  const form = await req.formData()
+  const kindRaw = form.get('kind')?.toString()
+  const uid = form.get('uid')?.toString().trim()
+  const file = form.get('file') as unknown as File | null
+  const urlFromForm = form.get('url')?.toString().trim()
 
-  if (contentType.includes('application/json')) {
-    const { kind, uid, url } = await req.json()
-    if (!kind || !uid || !url)
-      return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
-
-    const asset = await prisma.asset.update({
-      where: { id },
-      data: { kind, uid, url },
-    })
-    return NextResponse.json({ ok: true, asset })
+  if (!uid) {
+    return NextResponse.json({ error: 'uid is required' }, { status: 400 })
   }
 
-  if (contentType.includes('multipart/form-data')) {
-    const formData = await req.formData()
-    const kind = formData.get('kind')?.toString() as AssetKind
-    const uid = formData.get('uid')?.toString()
-    const file = formData.get('file') as File | null
+  let newUrl: string | undefined
 
-    if (!kind || !uid || !file)
-      return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+  if (file) {
+    // อัปโหลดไฟล์ขึ้น Supabase Storage
+    const bytes = await file.arrayBuffer()
+    const ext = file.name.split('.').pop() || 'bin'
+    const storagePath = `assets/${id}-${Date.now()}.${ext}`
 
-    const bytes = Buffer.from(await file.arrayBuffer())
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-    await mkdir(uploadsDir, { recursive: true })
-
-    const safeName = `${Date.now()}-${uid}-${file.name.replace(/[^a-z0-9_.-]/gi, '_')}`
-    const fullPath = path.join(uploadsDir, safeName)
-    await writeFile(fullPath, bytes)
-    const url = `/uploads/${safeName}`
-
-    const asset = await prisma.asset.update({
-      where: { id },
-      data: { kind, uid, url },
+    const up = await supabase.storage.from(process.env.SUPABASE_BUCKET!).upload(storagePath, new Uint8Array(bytes), {
+      upsert: true,
+      contentType: file.type || 'application/octet-stream',
     })
-    return NextResponse.json({ ok: true, asset })
+    if (up.error) {
+      return NextResponse.json({ error: up.error.message }, { status: 400 })
+    }
+    const { data: pub } = supabase.storage
+      .from(process.env.SUPABASE_BUCKET!)
+      .getPublicUrl(storagePath)
+
+    newUrl = pub.publicUrl
+  } else if (urlFromForm) {
+    // ไม่อัปโหลดไฟล์ แต่เปลี่ยน URL
+    newUrl = urlFromForm
   }
 
-  return NextResponse.json({ error: 'Unsupported content-type' }, { status: 415 })
+  const data: any = { uid }
+  if (kindRaw) data.kind = kindRaw as AssetKind
+  if (newUrl) data.url = newUrl
+
+  const updated = await prisma.asset.update({
+    where: { id },
+    data,
+  })
+
+  return NextResponse.json({ asset: updated })
 }
 
 export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
+  const asset = await prisma.asset.findUnique({ where: { id } })
+  if (!asset) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   try {
-    const asset = await prisma.asset.findUnique({ where: { id } })
-    if (!asset) {
-      return NextResponse.json({ error: 'Asset not found' }, { status: 404 })
+    // แปลง URL กลับเป็น path ใน Storage (ถ้า bucket เป็น public)
+    const url = new URL(asset.url)
+    const idx = url.pathname.indexOf(`/object/public/${process.env.SUPABASE_BUCKET}/`)
+    if (idx >= 0) {
+      const storagePath = url.pathname.slice(idx + `/object/public/${process.env.SUPABASE_BUCKET}/`.length)
+      await supabase.storage.from(process.env.SUPABASE_BUCKET!).remove([storagePath])
     }
-    if (asset.url.startsWith('/uploads/')) {
-      const filePath = path.join(process.cwd(), 'public', asset.url)
-      try {
-        await unlink(filePath)
-        console.log(`Deleted file: ${filePath}`)
-      } catch (err: any) {
-        console.warn(`File not found or already deleted: ${filePath}`)
-      }
-    }
-    await prisma.asset.delete({ where: { id } })
-
-    return NextResponse.json({ ok: true })
-  } catch (err) {
-    console.error('DELETE asset error:', err)
-    return NextResponse.json({ error: 'Delete failed or not found' }, { status: 400 })
+  } catch (e) {
+    console.warn('Delete from storage failed', e)
   }
+
+  await prisma.asset.delete({ where: { id } })
+  return NextResponse.json({ ok: true })
 }

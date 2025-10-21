@@ -1,26 +1,30 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { writeFile, mkdir } from 'fs/promises'
-import path from 'path'
 import { AssetKind } from '@prisma/client'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export async function GET() {
   const assets = await prisma.asset.findMany({ orderBy: { createdAt: 'desc' } })
   return NextResponse.json({ assets })
 }
 
-export async function POST(req: Request) { 
+export async function POST(req: Request) {
   const contentType = req.headers.get('content-type') || ''
-
 
   if (contentType.includes('application/json')) {
     const { kind, uid, url } = await req.json()
-    if (!kind || !uid || !url) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+    if (!kind || !uid || !url)
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
 
     const asset = await prisma.asset.upsert({
       where: { kind_uid: { kind, uid } },
       update: { url },
-      create: { kind, uid, url }
+      create: { kind, uid, url },
     })
     return NextResponse.json({ ok: true, asset })
   }
@@ -31,22 +35,33 @@ export async function POST(req: Request) {
     const uid = formData.get('uid')?.toString()
     const file = formData.get('file') as File | null
 
-    if (!kind || !uid || !file) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+    if (!kind || !uid || !file)
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
 
-    const bytes = Buffer.from(await file.arrayBuffer())
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-    await mkdir(uploadsDir, { recursive: true })
+    const ext = file.name.split('.').pop()
+    const filePath = `assets/${uid}-${Date.now()}.${ext}`
 
-    const safeName = `${Date.now()}-${uid}-${file.name.replace(/[^a-z0-9_.-]/gi, '_')}`
-    const fullPath = path.join(uploadsDir, safeName)
-    await writeFile(fullPath, bytes)
 
-    const url = `/uploads/${safeName}`
+    const { error: uploadError } = await supabase.storage
+      .from(process.env.SUPABASE_BUCKET!)
+      .upload(filePath, await file.arrayBuffer(), { upsert: true })
 
+    if (uploadError) {
+      console.error('Upload error:', uploadError)
+      return NextResponse.json({ error: 'Upload failed' }, { status: 500 })
+    }
+
+    // 👉 ดึง public URL ของไฟล์ที่อัปโหลด
+    const { data } = supabase.storage
+      .from(process.env.SUPABASE_BUCKET!)
+      .getPublicUrl(filePath)
+    const publicUrl = data.publicUrl
+
+    // 👉 บันทึก URL ลง DB
     const asset = await prisma.asset.upsert({
       where: { kind_uid: { kind, uid } },
-      update: { url },
-      create: { kind, uid, url }
+      update: { url: publicUrl },
+      create: { kind, uid, url: publicUrl },
     })
 
     return NextResponse.json({ ok: true, asset })
