@@ -1,12 +1,27 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { AssetKind } from '@prisma/client'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+function getSupabase(): SupabaseClient {
+  const url =
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL 
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    throw new Error('Supabase environment variables are missing on the server')
+  }
+  return createClient(url, key, {
+    auth: { persistSession: false },
+  })
+}
 
 export async function GET() {
   const assets = await prisma.asset.findMany({ orderBy: { createdAt: 'desc' } })
@@ -15,6 +30,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const contentType = req.headers.get('content-type') || ''
+  const supabase = getSupabase()
 
   if (contentType.includes('application/json')) {
     const { kind, uid, url } = await req.json()
