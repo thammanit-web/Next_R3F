@@ -84,7 +84,7 @@ function DesignCard({ design }: { design: Design }) {
 
 export default function AdminPage() {
   const [designs, setDesigns] = useState<Design[]>([]);
-  const base = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3008';
+  const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://next-r3-f-seven.vercel.app';
 
   // --- Data Fetching Logic (unchanged) ---
   useEffect(() => {
