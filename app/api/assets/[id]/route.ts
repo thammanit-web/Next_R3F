@@ -3,11 +3,22 @@ import { prisma } from '@/lib/prisma'
 import { AssetKind } from '@prisma/client'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+  const key =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    console.error('Supabase environment variables missing')
+    throw new Error('Missing Supabase environment variables')
+  }
+
+  return createClient(url, key)
+}
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
   const asset = await prisma.asset.findUnique({ where: { id } })
