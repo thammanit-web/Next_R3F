@@ -5,8 +5,8 @@ import Link from 'next/link';
 import Preview from '@/app/skateboardbuild/Preview';
 import { CustomizerControlsProvider } from '@/app/skateboardbuild/context';
 import { ArrowLeftIcon, ExclamationTriangleIcon, TrashIcon } from '@heroicons/react/24/outline';
+export const dynamic = 'force-dynamic'
 
-// --- Type Definition (unchanged) ---
 type Design = {
     id: string;
     deckUid: string;

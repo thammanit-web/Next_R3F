@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { InteractiveSkateboard } from '@/components/SkateScene';
 
+export const dynamic = 'force-dynamic'
+
 type AssetKind = 'DECK' | 'WHEEL' | 'GRIPTAPE';
 type AssetApiItem = {
     uid: string;
